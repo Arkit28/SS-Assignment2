@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "udp.h"
+#include <ctype.h>
 
 int main(int argc, char *argv[])
 {
@@ -14,6 +15,8 @@ int main(int argc, char *argv[])
 
     assert(sd > -1);
 
+    printf("Server Started!\n");
+
     // Server main loop
     while (1) 
     {
@@ -21,7 +24,7 @@ int main(int argc, char *argv[])
         char client_request[BUFFER_SIZE], server_response[BUFFER_SIZE];
 
         // Demo code (remove later)
-        printf("Server is listening on port %d\n", SERVER_PORT);
+        //printf("Server is listening on port %d\n", SERVER_PORT);
 
         // Variable to store incoming client's IP address and port
         struct sockaddr_in client_address;
@@ -34,10 +37,17 @@ int main(int argc, char *argv[])
         // Successfully received an incoming request
         if (rc > 0)
         {
+            // Print client's IP and port
+            char client_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_address.sin_addr, client_ip, sizeof(client_ip));
+            //printf("Received packet from %s:%d\n", client_ip, ntohs(client_address.sin_port));
+
             // Demo code (remove later)
             strcpy(server_response, "Hi, the server has received: ");
             strcat(server_response, client_request);
             strcat(server_response, "\n");
+
+            printf("%d: %s", ntohs(client_address.sin_port), client_request);
 
             // This function writes back to the incoming client,
             // whose address is now available in client_address, 
@@ -45,8 +55,6 @@ int main(int argc, char *argv[])
             // (See details of the function in udp.h)
             rc = udp_socket_write(sd, &client_address, server_response, BUFFER_SIZE);
 
-            // Demo code (remove later)
-            printf("Request served...\n");
         }
     }
 
