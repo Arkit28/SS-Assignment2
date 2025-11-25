@@ -1,8 +1,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "udp.h"
+#include <pthread.h>
+#include <string.h>
 #include <ctype.h>
+#include "udp.h"
+#include "chat_structures.h"
+#include "list_helpers.h"
 
 int main(int argc, char *argv[])
 {

@@ -34,6 +34,9 @@ void list_free_all(ClientNode **head);
 // Add a muted person to clinet's list (assumes WRITE lock on mute_lock is held)
 void mute_add(MutedPair **head, char *muter, char *muted);
 
+//adds specific person to all clients' muted lists
+void server_mute(MutedPair **head);
+
 // Check if client has muted the specified person (assumes READ lock is held)
 int is_muted(MutedPair *head, char *muter, char *muted);
 
