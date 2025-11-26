@@ -26,9 +26,9 @@ typedef struct MutedPair {
 
 typedef struct {
     ClientNode *ClientListHead;
-    MutedPair *MutedHead;
-    pthread_rwlock_t list_lock;
-    pthread_rwlock_t mute_lock;
+    MutedPair *MutedListHead;
+    pthread_rwlock_t client_list_lock;
+    pthread_rwlock_t mute_list_lock;
     int socket_fd;
 } ServerContext;
 

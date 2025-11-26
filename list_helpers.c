@@ -214,6 +214,16 @@ void mute_remove_all_for_client(MutedPair **head, char *client_name){
 void mute_print_all(MutedPair *head){}
 
 // delete muted ppl list (assumes WRITE lock is held)
-void mute_free_all(MutedPair **head){}
+void mute_free_all(MutedPair **head){
+    MutedPair* current = head*;
+    MutedPair* next_node;
+
+    while(current != NULL){
+        next_node = current->next;
+        free(current);
+        current = next_node;
+    }
+    free(head);
+}
 
 
