@@ -8,6 +8,16 @@
 #define SERVER_PORT 12000
 #define BUFFER_SIZE 1024
 
+enum {
+    CONNECT = 0,
+    DISCONNECT,
+    MESSAGE,
+    PRIVATE_MESSAGE,
+    MUTE,
+    UNMUTE,
+    RENAME,
+    KICK_REQUEST,    
+};
 
 typedef struct ClientNode {
     char name[MAX_NAME_LEN];
