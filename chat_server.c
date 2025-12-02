@@ -13,7 +13,7 @@
 void* listener_thread(void* arg);
 void* worker_thread(void* arg);
 
-void print_tokens(char *args[], int argc);
+void print_tokens(char *args[], int argc); // debug function
 void parse_command(char request[], char *args[], int *argc);
 int classify_command(char *args[], int argc);
 
@@ -123,7 +123,7 @@ void* listener_thread(void* arg){
     while (1) 
     {
         // Storage for request and response messages
-        char client_request[BUFFER_SIZE], server_response[BUFFER_SIZE];
+        char client_request[BUFFER_SIZE] ;
 
         // Variable to store incoming client's IP address and port
         struct sockaddr_in client_address;
@@ -142,51 +142,32 @@ void* listener_thread(void* arg){
                 client_request[BUFFER_SIZE-1] = '\0';
             }
 
-            /* parse a copy so strtok doesn't modify the original message */
-            char request_copy[BUFFER_SIZE];
-            strncpy(request_copy, client_request, BUFFER_SIZE);
-            request_copy[BUFFER_SIZE-1] = '\0';
-
-            char* args[200];
-            int argc = 0;
-            int command_type = -1;
-
-            parse_command(request_copy, args, &argc);
-            print_tokens(args, argc);
-            command_type = classify_command(args, argc);
-            printf("command type:%d\n", command_type);
-
-            switch (command_type) {
-                case CONNECT:
-                    printf("Client: %d wants to connect\n", ntohs(client_address.sin_port));
-                    break;
-                case DISCONNECT:
-                    printf("Client: %d wants to disconnect\n", ntohs(client_address.sin_port));
-                    break;
-                case MESSAGE:
-                    printf("Client: %d wants to send a message\n", ntohs(client_address.sin_port));
-                    break;
-                case PRIVATE_MESSAGE:
-                    printf("Client: %d wants to send a private message\n", ntohs(client_address.sin_port));
-                    break;
-                case MUTE:
-                    printf("Client: %d wants to mute someone\n", ntohs(client_address.sin_port));
-                    break;
-                case UNMUTE:
-                    printf("Client: %d wants to unmute someone\n", ntohs(client_address.sin_port));
-                    break;
-                case RENAME:
-                    printf("Client: %d wants to rename themself\n", ntohs(client_address.sin_port));
-                    break;
-                case KICK_REQUEST:
-                    printf("Client: %d wants to kick someone\n", ntohs(client_address.sin_port));
-                    break;
-                default:
-                    printf("Client: %d sent an unknown command\n", ntohs(client_address.sin_port));
-                    break;
+            // package arguments for worker thread
+            WorkerArgs *args = malloc(sizeof(WorkerArgs));
+            if(!args){
+                perror("Failed to allocate memory for worker args");
+                continue;
             }
 
-            /* Demo code (remove later) - build response using original message (preserves spaces) */
+            args->server = server;
+            args->client_addr = client_address;
+            strncpy(args->request, client_request, BUFFER_SIZE - 1);
+            args->request[BUFFER_SIZE - 1] = '\0'; 
+
+            //spawn worker thread:
+            pthread_t worker_tid;
+            if(pthread_create(&worker_tid, NULL, worker_thread, (void*)args) != 0){    
+                perror("Failed to create worker thread");
+                free(args);
+                continue;
+            }
+
+            pthread_detach(worker_tid);
+            
+
+            
+
+            /* Demo code (remove later) - build response using original message (preserves spaces) 
             strcpy(server_response, "Hi, the server has received: ");
             strncat(server_response, client_request, BUFFER_SIZE - strlen(server_response) - 1);
             strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
@@ -194,7 +175,75 @@ void* listener_thread(void* arg){
             printf("%d: %s\n", ntohs(client_address.sin_port), client_request);
 
             rc = udp_socket_write(server->socket_fd, &client_address, server_response, BUFFER_SIZE);
+            */
         }
     }
 
+}
+
+void* worker_thread(void* arg){
+    WorkerArgs* args = (WorkerArgs*) arg;
+
+    char* tokens[BUFFER_SIZE];
+    int argc = 0;
+    int command_type = -1;
+
+    printf("Worker thread has pulled up \n");
+
+    char request_copy[BUFFER_SIZE];
+    strncpy(request_copy, args->request, BUFFER_SIZE - 1);
+    request_copy[BUFFER_SIZE - 1] = '\0';
+
+    parse_command(args->request, tokens, &argc);
+    //print_tokens(args, argc);
+    command_type = classify_command(tokens, argc);
+    //printf("command type:%d\n", command_type);
+
+    
+
+    switch (command_type) {
+        case CONNECT:
+            printf("Client: %d wants to connect\n", ntohs(args->client_addr.sin_port));
+            break;
+        case DISCONNECT:
+            printf("Client: %d wants to disconnect\n", ntohs(args->client_addr.sin_port));
+            break;
+        case MESSAGE:
+            printf("Client: %d wants to send a message\n", ntohs(args->client_addr.sin_port));
+            break;
+        case PRIVATE_MESSAGE:
+            printf("Client: %d wants to send a private message\n", ntohs(args->client_addr.sin_port));
+            break;
+        case MUTE:
+            printf("Client: %d wants to mute someone\n", ntohs(args->client_addr.sin_port));
+            break;
+        case UNMUTE:
+            printf("Client: %d wants to unmute someone\n", ntohs(args->client_addr.sin_port));
+            break;
+        case RENAME:
+            printf("Client: %d wants to rename themself\n", ntohs(args->client_addr.sin_port));
+            break;
+        case KICK_REQUEST:
+            printf("Client: %d wants to kick someone\n", ntohs(args->client_addr.sin_port));
+            break;
+        default:
+            printf("Client: %d sent an unknown command\n", ntohs(args->client_addr.sin_port));
+            break;
+        }
+
+        char server_response[BUFFER_SIZE];
+
+        strcpy(server_response, "Hi, the server has received: ");
+        strncat(server_response, request_copy, BUFFER_SIZE - strlen(server_response) - 1);
+        strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
+
+        printf("%d: %s\n", ntohs(args->client_addr.sin_port), request_copy);
+
+        int rc = udp_socket_write(args->server->socket_fd, &args->client_addr, server_response, BUFFER_SIZE);
+    
+
+
+    free(arg);
+    printf("Worker thread has done the work \n");
+    return NULL;
 }
