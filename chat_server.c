@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include "udp.h"
 #include "chat_structures.h"
-#include "list_helpers.h"
+#include "list_helpers.c"
 
 
 //server commands
@@ -19,6 +19,7 @@ int classify_command(char *args[], int argc);
 
 void handle_conn(ServerContext *server, struct sockaddr_in *client_addr, char *name);
 void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr);
+void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char *new_name);
 
 int main(int argc, char *argv[])
 {
@@ -195,19 +196,38 @@ void* worker_thread(void* arg){
     request_copy[BUFFER_SIZE - 1] = '\0';
 
     parse_command(args->request, tokens, &argc);
-    //print_tokens(args, argc);
+    print_tokens(tokens, argc);
     command_type = classify_command(tokens, argc);
-    //printf("command type:%d\n", command_type);
+    printf("command type:%d\n", command_type);
 
     
 
     switch (command_type) {
         case CONNECT:
             printf("Client: %d wants to connect\n", ntohs(args->client_addr.sin_port));
+            if(argc >= 2) {
+                handle_conn(args->server, &args->client_addr, tokens[1]);
+            }
+            /*
+            else{
+            send_error(args->server, &args->client_addr, "CONNECT command requires a name");   //TODO
+            }
+            */
             break;
+
         case DISCONNECT:
             printf("Client: %d wants to disconnect\n", ntohs(args->client_addr.sin_port));
+            
+            if(argc >= 1){
+                handle_disconn(args->server, &args->client_addr);
+            }
+            /*
+            else{
+            send_error(args->server, &args->client_addr, "DISCONNECT command requires no additional arguments");   //TODO
+            }
+            */
             break;
+
         case MESSAGE:
             printf("Client: %d wants to send a message\n", ntohs(args->client_addr.sin_port));
             break;
@@ -222,6 +242,16 @@ void* worker_thread(void* arg){
             break;
         case RENAME:
             printf("Client: %d wants to rename themself\n", ntohs(args->client_addr.sin_port));
+
+            if(argc >= 2){
+                handle_rename(args->server, &args->client_addr, tokens[1]);
+            }
+            /*
+            else{
+            send_error(args->server, &args->client_addr, "RENAME command requires a new name");   //TODO
+            }
+            */
+
             break;
         case KICK_REQUEST:
             printf("Client: %d wants to kick someone\n", ntohs(args->client_addr.sin_port));
@@ -246,4 +276,66 @@ void* worker_thread(void* arg){
     free(arg);
     printf("Worker thread has done the work \n");
     return NULL;
+}
+
+void handle_conn(ServerContext *server, struct sockaddr_in *client_addr, char *name){
+    // 0-lock client list for writing
+    pthread_rwlock_wrlock(&server->client_list_lock);
+
+    // 1-create new client node and add to client list
+    // 2-set client addr and name
+    // 3-send client acknowledgement message
+    // 4-broadcast to all other clients that a new client has joined
+
+    list_add_client(&server->ClientListHead, name, client_addr);
+    //list_print_all(server->ClientListHead);
+
+    printf("Handled CONNECT for %s\n", name);
+    
+    //send_all(server, msg, exclude_addr);   TODO: send welcome message to new client and broadcast to others
+
+    //unlock client list
+    pthread_rwlock_unlock(&server->client_list_lock);
+}
+
+void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
+    // 0-lock client list for writing
+    pthread_rwlock_wrlock(&server->client_list_lock);
+
+    // 1-find client node by addr
+    // 2-remove client node from client list
+    // 3-send client acknowledgement message
+    // 4-broadcast to all other clients that a client has left
+
+    list_remove_client(&server->ClientListHead, client_addr);
+    //list_print_all(server->ClientListHead);
+
+    printf("Handled DISCONNECT\n");
+
+    //send_all(server, msg, exclude_addr);   TODO: send goodbye message to departing client and broadcast to others
+
+    //unlock client list
+    pthread_rwlock_unlock(&server->client_list_lock);
+}
+
+void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char *new_name){
+    // 0-lock client list for writing
+    pthread_rwlock_wrlock(&server->client_list_lock);
+
+    // 1-find client node by addr
+    // 2-update client name
+    // 3-send client acknowledgement message
+    // 4-broadcast to all other clients that a client has renamed themself
+
+    if(list_find_by_address(server->ClientListHead, client_addr) != NULL){
+        ClientNode* client = list_find_by_address(server->ClientListHead, client_addr);
+        strncpy(client->name, new_name, MAX_NAME_LEN - 1);
+        client->name[MAX_NAME_LEN - 1] = '\0';
+    }
+    list_print_all(server->ClientListHead);
+
+    printf("Handled RENAME to %s\n", new_name);
+
+    //unlock client list
+    pthread_rwlock_unlock(&server->client_list_lock);
 }

@@ -92,7 +92,7 @@ void list_print_all(ClientNode *head){
 
     inet_ntop(AF_INET, &head->address.sin_addr, NULL, 0);
     while(current != NULL){
-        printf("Client Name: %s, IP: %s, Port: %d, Connected: %d\n", 
+        printf(" Client Name: %s IP: %s\n Port: %d\n Connected: %d\n", 
                current->name, 
                inet_ntoa(current->address.sin_addr), 
                ntohs(current->address.sin_port), 
@@ -133,11 +133,11 @@ void mute_add(MutedPair **head, char *muter, char *muted){
     MutedPair* new_pair = (MutedPair*) malloc(sizeof(MutedPair));
     if(new_pair == NULL) return;
 
-    strncpy(new_pair->muter, muterm MAX_NAME_LEN-1);
+    strncpy(new_pair->muter, muter, MAX_NAME_LEN-1);
     new_pair->muter[MAX_NAME_LEN-1] = '\0';
 
-    strncpy(new_pair->muted, muted);
-    new_pair->muted[MAX_LEN_NAME-1] = '\0';
+    strncpy(new_pair->muted, muted, MAX_NAME_LEN-1);
+    new_pair->muted[MAX_NAME_LEN-1] = '\0';
 
     new_pair->next = *head;
     *head = new_pair;
@@ -169,7 +169,7 @@ int mute_remove(MutedPair **head, char *muter, char *muted){
 
     while(current != NULL){
         if(strcmp(current->muter, muter) == 0 && strcmp(current->muted, muted) == 0){
-            if(prev == NULL){
+            if(previous == NULL){
                 *head = current->next;
             }
             else{
@@ -180,7 +180,7 @@ int mute_remove(MutedPair **head, char *muter, char *muted){
             free(current);
             return 1;       //unmuted successfully
         }
-        prev = curr;
+        previous = current;
         current = current->next;
     }
 
@@ -215,7 +215,7 @@ void mute_print_all(MutedPair *head){}
 
 // delete muted ppl list (assumes WRITE lock is held)
 void mute_free_all(MutedPair **head){
-    MutedPair* current = head*;
+    MutedPair* current = *head;
     MutedPair* next_node;
 
     while(current != NULL){
