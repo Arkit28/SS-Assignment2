@@ -48,6 +48,9 @@ int main(int argc, char *argv[])
         // Demo code (remove later)
         //strcpy(client_request, "hello");
 
+        //strips \n from input
+        client_request[strcspn(client_request, "\n")] = '\0';
+
         // This function writes to the server (sends request)
         // through the socket at sd.
         // (See details of the function in udp.h)

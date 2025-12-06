@@ -14,11 +14,12 @@ void* listener_thread(void* arg);
 void* worker_thread(void* arg);
 
 void print_tokens(char *args[], int argc); // debug function
-void parse_command(char request[], char *args[], int *argc);
-int classify_command(char *args[], int argc);
+void parse_command(char request[], char command[], char arguments[]);
+int classify_command(char *args, int argc);
 
 void handle_conn(ServerContext *server, struct sockaddr_in *client_addr, char *name);
 void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr);
+void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char *message);
 void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char *new_name);
 
 int main(int argc, char *argv[])
@@ -62,51 +63,46 @@ int main(int argc, char *argv[])
 }
 
 
-void parse_command(char request[], char* args[], int* argc){
-    // parse command from client request
-    // arg[0] = command
-    
-    char* token = strtok(request, " ");
-    *argc = 0;
-    while(token != NULL){
-        args[(*argc)++] = token;
-        token = strtok(NULL, " ");
+void parse_command(char request[], char command[], char arguments[]) {
+    char *space = strchr(request, ' ');
+
+    if (!space) {
+        strcpy(command, request);
+        arguments[0] = '\0';
+        return;
     }
 
-    args[*argc] = NULL;
+    // Split into two parts
+    *space = '\0';      
+    strcpy(command, request);
+
+    strcpy(arguments, space + 1);
 }
 
-void print_tokens(char *args[], int argc){
-    printf("parsed %d tokens:\n", argc);
-    for(int i = 0; i < argc; ++i){
-        printf("    Token[%d]: %s\n", i, args[i]);
-    }
-}
-
-int classify_command(char *args[], int argc){
+int classify_command(char *args, int argc){
     //args[0]= tolower(args[0]);
-    if(strncmp("conn$", args[0], 5) == 0){
+    if(strncmp("conn$", args, 5) == 0){
         return CONNECT;
     }
-    else if(strncmp("disconn$", args[0], 8) == 0){
+    else if(strncmp("disconn$", args, 8) == 0){
         return DISCONNECT;
     }
-    else if(strncmp("say$", args[0], 4) == 0){
+    else if(strncmp("say$", args, 4) == 0){
         return MESSAGE;
     }
-    else if(strncmp("sayto$", args[0], 6) == 0){
+    else if(strncmp("sayto$", args, 6) == 0){
         return PRIVATE_MESSAGE;
     }
-    else if(strncmp("mute$", args[0], 5) == 0){
+    else if(strncmp("mute$", args, 5) == 0){
         return MUTE;
     }
-    else if(strncmp("unmute$", args[0], 7) == 0){
+    else if(strncmp("unmute$", args, 7) == 0){
         return UNMUTE;
     }
-    else if(strncmp("rename$", args[0], 7) == 0){
+    else if(strncmp("rename$", args, 7) == 0){
         return RENAME;
     }
-    else if(strncmp("kick$", args[0], 5) == 0){
+    else if(strncmp("kick$", args, 5) == 0){
         return KICK_REQUEST;            //NOTE : admin verfication is needed
     }
 
@@ -185,19 +181,19 @@ void* listener_thread(void* arg){
 void* worker_thread(void* arg){
     WorkerArgs* args = (WorkerArgs*) arg;
 
-    char* tokens[BUFFER_SIZE];
-    int argc = 0;
+    char command[BUFFER_SIZE];
+    char arguments[BUFFER_SIZE];
     int command_type = -1;
 
-    printf("Worker thread has pulled up \n");
+    //printf("Worker thread has pulled up \n");
 
     char request_copy[BUFFER_SIZE];
     strncpy(request_copy, args->request, BUFFER_SIZE - 1);
     request_copy[BUFFER_SIZE - 1] = '\0';
 
-    parse_command(args->request, tokens, &argc);
-    print_tokens(tokens, argc);
-    command_type = classify_command(tokens, argc);
+    parse_command(args->request, command, arguments);
+    //print_tokens(comman, argc);
+    command_type = classify_command(command, 0);
     printf("command type:%d\n", command_type);
 
     
@@ -205,8 +201,8 @@ void* worker_thread(void* arg){
     switch (command_type) {
         case CONNECT:
             printf("Client: %d wants to connect\n", ntohs(args->client_addr.sin_port));
-            if(argc >= 2) {
-                handle_conn(args->server, &args->client_addr, tokens[1]);
+            if(arguments[0] != '\0') {
+                handle_conn(args->server, &args->client_addr, arguments);
             }
             /*
             else{
@@ -218,7 +214,7 @@ void* worker_thread(void* arg){
         case DISCONNECT:
             printf("Client: %d wants to disconnect\n", ntohs(args->client_addr.sin_port));
             
-            if(argc >= 1){
+            if(arguments[0] != '\0'){
                 handle_disconn(args->server, &args->client_addr);
             }
             /*
@@ -230,6 +226,15 @@ void* worker_thread(void* arg){
 
         case MESSAGE:
             printf("Client: %d wants to send a message\n", ntohs(args->client_addr.sin_port));
+
+            if(arguments != NULL){
+                handle_message(args->server, &args->client_addr, arguments);
+            }
+            /*
+            else{
+            send_error(args->server, &arg->client_addr, "SAY command requires message. ");
+            }
+            */
             break;
         case PRIVATE_MESSAGE:
             printf("Client: %d wants to send a private message\n", ntohs(args->client_addr.sin_port));
@@ -243,8 +248,8 @@ void* worker_thread(void* arg){
         case RENAME:
             printf("Client: %d wants to rename themself\n", ntohs(args->client_addr.sin_port));
 
-            if(argc >= 2){
-                handle_rename(args->server, &args->client_addr, tokens[1]);
+            if(arguments != NULL){
+                handle_rename(args->server, &args->client_addr, arguments);
             }
             /*
             else{
@@ -261,20 +266,14 @@ void* worker_thread(void* arg){
             break;
         }
 
-        char server_response[BUFFER_SIZE];
+    char server_response[BUFFER_SIZE];
+    strcpy(server_response, "Hi, the server has received: ");
+    strncat(server_response, request_copy, BUFFER_SIZE - strlen(server_response) - 1);
+    strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
+    int rc = udp_socket_write(args->server->socket_fd, &args->client_addr, server_response, BUFFER_SIZE);
 
-        strcpy(server_response, "Hi, the server has received: ");
-        strncat(server_response, request_copy, BUFFER_SIZE - strlen(server_response) - 1);
-        strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
-
-        printf("%d: %s\n", ntohs(args->client_addr.sin_port), request_copy);
-
-        int rc = udp_socket_write(args->server->socket_fd, &args->client_addr, server_response, BUFFER_SIZE);
-    
-
-
-    free(arg);
-    printf("Worker thread has done the work \n");
+    free(args);
+    //printf("Worker thread has done the work \n");
     return NULL;
 }
 
@@ -313,6 +312,27 @@ void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
     printf("Handled DISCONNECT\n");
 
     //send_all(server, msg, exclude_addr);   TODO: send goodbye message to departing client and broadcast to others
+
+    //unlock client list
+    pthread_rwlock_unlock(&server->client_list_lock);
+}
+
+void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char *message){
+    // 0-lock client list for reading
+    pthread_rwlock_rdlock(&server->client_list_lock);
+
+    // 1-find client node by addr
+    // 2-broadcast message to all other clients except the sender
+
+    char server_response[BUFFER_SIZE];
+    ClientNode* sender = list_find_by_address(server->ClientListHead, client_addr);
+    if(sender){
+        printf("%s: %s\n", sender->name, message);
+    }
+    else{
+        printf("Unknown client: %s\n", message);
+    }
+    int rc = udp_socket_write(server->socket_fd, client_addr, server_response, BUFFER_SIZE);
 
     //unlock client list
     pthread_rwlock_unlock(&server->client_list_lock);
