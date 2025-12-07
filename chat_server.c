@@ -21,6 +21,8 @@ void handle_conn(ServerContext *server, struct sockaddr_in *client_addr, char *n
 void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr);
 void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char *message);
 void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char *new_name);
+void handle_mute(ServerContext *server, struct sockaddr_in *client_addr, char *muted_name);
+void handle_unmute(ServerContext *server, struct sockaddr_in *client_addr, char *unmuted_name);
 
 int main(int argc, char *argv[])
 {
@@ -194,7 +196,7 @@ void* worker_thread(void* arg){
     parse_command(args->request, command, arguments);
     //print_tokens(comman, argc);
     command_type = classify_command(command, 0);
-    printf("command type:%d\n", command_type);
+    //printf("command type:%d\n", command_type);
 
     
 
@@ -241,9 +243,27 @@ void* worker_thread(void* arg){
             break;
         case MUTE:
             printf("Client: %d wants to mute someone\n", ntohs(args->client_addr.sin_port));
+
+            if(arguments != NULL){
+                handle_mute(args->server, &args->client_addr, arguments);
+            }
+            /*
+            else{
+            send_error(args->server, &args->client_addr, "MUTE command requires a name");   //TODO
+            }*/
+
             break;
         case UNMUTE:
             printf("Client: %d wants to unmute someone\n", ntohs(args->client_addr.sin_port));
+
+            if(arguments != NULL){
+                handle_unmute(args->server, &args->client_addr, arguments);
+            }
+            /*
+            else{
+                send_error(args->server, &args->client_addr, "UNMUTE command requires a name");   //TODO
+            }*/
+
             break;
         case RENAME:
             printf("Client: %d wants to rename themself\n", ntohs(args->client_addr.sin_port));
@@ -253,7 +273,7 @@ void* worker_thread(void* arg){
             }
             /*
             else{
-            send_error(args->server, &args->client_addr, "RENAME command requires a new name");   //TODO
+                send_error(args->server, &args->client_addr, "RENAME command requires a new name");   //TODO
             }
             */
 
@@ -265,12 +285,13 @@ void* worker_thread(void* arg){
             printf("Client: %d sent an unknown command\n", ntohs(args->client_addr.sin_port));
             break;
         }
-
+      
     char server_response[BUFFER_SIZE];
     strcpy(server_response, "Hi, the server has received: ");
     strncat(server_response, request_copy, BUFFER_SIZE - strlen(server_response) - 1);
     strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
     int rc = udp_socket_write(args->server->socket_fd, &args->client_addr, server_response, BUFFER_SIZE);
+    
 
     free(args);
     //printf("Worker thread has done the work \n");
@@ -328,6 +349,9 @@ void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char
     ClientNode* sender = list_find_by_address(server->ClientListHead, client_addr);
     if(sender){
         printf("%s: %s\n", sender->name, message);
+
+        // only show to clients who havent muted the sender: TODO
+
     }
     else{
         printf("Unknown client: %s\n", message);
@@ -358,4 +382,68 @@ void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char 
 
     //unlock client list
     pthread_rwlock_unlock(&server->client_list_lock);
+}
+
+void handle_mute(ServerContext *server, struct sockaddr_in *client_addr, char *muted_name){
+    // 0- lock muted list for write
+    pthread_rwlock_wrlock(&server->mute_list_lock);
+
+    // 1-verify both muter and muted exist in client list
+    ClientNode* muter_node = list_find_by_address(server->ClientListHead, client_addr);
+    ClientNode* muted_node = list_find_by_name(server->ClientListHead, muted_name);
+
+    // 2 - add muted pair to muted list
+    if(muter_node && muted_node){
+        mute_add(&server->MutedListHead, muter_node->name, muted_node->name);
+        printf("Handled MUTE: %s muted %s\n", muter_node->name, muted_node->name);
+    }
+    else{
+        printf("MUTE failed: muter or muted not found\n");
+    }
+
+    // 3 - send acknowledgement to muter (TODO)
+    char server_response[BUFFER_SIZE];
+    strcpy(server_response, "You have muted ");
+    strncat(server_response, muted_name, BUFFER_SIZE - strlen(server_response) - 1);
+    strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
+
+    int rc = udp_socket_write(server->socket_fd, client_addr, server_response, BUFFER_SIZE);
+    
+    // 4 - unlock muted list
+    pthread_rwlock_unlock(&server->mute_list_lock);
+
+}
+
+void handle_unmute(ServerContext *server, struct sockaddr_in *client_addr, char* unmuted_name){
+    // 0- lock muted list for write
+    pthread_rwlock_wrlock(&server->mute_list_lock);
+
+    // 1-verify both muter and muted exist in client list
+    ClientNode* muter_node = list_find_by_address(server->ClientListHead, client_addr);
+    ClientNode* muted_node = list_find_by_name(server->ClientListHead, unmuted_name);
+
+    // 2 - remove muted pair from muted list
+    if(muter_node && muted_node){
+        int result = mute_remove(&server->MutedListHead, muter_node->name, muted_node->name);
+        if(result){
+            printf("Handled UNMUTE: %s unmuted %s\n", muter_node->name, muted_node->name);
+        }
+        else{
+            printf("UNMUTE failed: mute pairing not found\n");
+        }
+    }
+    else{
+        printf("UNMUTE failed: muter or muted not found\n");
+    }
+
+    // 3 - send acknowledgement to muter (TODO)
+    char server_response[BUFFER_SIZE];
+    strcpy(server_response, "You have unmuted ");
+    strncat(server_response, unmuted_name, BUFFER_SIZE - strlen(server_response) - 1);
+    strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
+
+    int rc = udp_socket_write(server->socket_fd, client_addr, server_response, BUFFER_SIZE);
+    
+    // 4 - unlock muted list
+    pthread_rwlock_unlock(&server->mute_list_lock);
 }
