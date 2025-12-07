@@ -17,12 +17,18 @@ void print_tokens(char *args[], int argc); // debug function
 void parse_command(char request[], char command[], char arguments[]);
 int classify_command(char *args, int argc);
 
+//main commands
 void handle_conn(ServerContext *server, struct sockaddr_in *client_addr, char *name);
 void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr);
 void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char *message);
 void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char *new_name);
 void handle_mute(ServerContext *server, struct sockaddr_in *client_addr, char *muted_name);
 void handle_unmute(ServerContext *server, struct sockaddr_in *client_addr, char *unmuted_name);
+
+//comannd helpers
+void send_all(ServerContext *server, char *msg, struct sockaddr_in *exclude_addr); // TODO
+void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *error_msg); // TODO
+void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg); // TODOs
 
 int main(int argc, char *argv[])
 {
@@ -401,7 +407,7 @@ void handle_mute(ServerContext *server, struct sockaddr_in *client_addr, char *m
         printf("MUTE failed: muter or muted not found\n");
     }
 
-    // 3 - send acknowledgement to muter (TODO)
+    // 3 - send acknowledgement to muter 
     char server_response[BUFFER_SIZE];
     strcpy(server_response, "You have muted ");
     strncat(server_response, muted_name, BUFFER_SIZE - strlen(server_response) - 1);
@@ -447,3 +453,4 @@ void handle_unmute(ServerContext *server, struct sockaddr_in *client_addr, char*
     // 4 - unlock muted list
     pthread_rwlock_unlock(&server->mute_list_lock);
 }
+
