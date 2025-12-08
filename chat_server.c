@@ -24,9 +24,11 @@ void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char
 void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char *new_name);
 void handle_mute(ServerContext *server, struct sockaddr_in *client_addr, char *muted_name);
 void handle_unmute(ServerContext *server, struct sockaddr_in *client_addr, char *unmuted_name);
+void handle_private_message(ServerContext *server, struct sockaddr_in *client_addr, char *message, char *recipient_name);
+void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr, char *target_name);
 
 //comannd helpers
-void send_all(ServerContext *server, char *msg, struct sockaddr_in *exclude_addr); // TODO
+void send_all(ServerContext *server, char *msg); // TODO
 void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *error_msg); // TODO
 void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg); // TODOs
 
@@ -212,11 +214,11 @@ void* worker_thread(void* arg){
             if(arguments[0] != '\0') {
                 handle_conn(args->server, &args->client_addr, arguments);
             }
-            /*
+            
             else{
             send_error(args->server, &args->client_addr, "CONNECT command requires a name");   //TODO
             }
-            */
+            
             break;
 
         case DISCONNECT:
@@ -225,11 +227,11 @@ void* worker_thread(void* arg){
             if(arguments[0] != '\0'){
                 handle_disconn(args->server, &args->client_addr);
             }
-            /*
+            
             else{
             send_error(args->server, &args->client_addr, "DISCONNECT command requires no additional arguments");   //TODO
             }
-            */
+            
             break;
 
         case MESSAGE:
@@ -238,14 +240,33 @@ void* worker_thread(void* arg){
             if(arguments != NULL){
                 handle_message(args->server, &args->client_addr, arguments);
             }
-            /*
+            
             else{
-            send_error(args->server, &arg->client_addr, "SAY command requires message. ");
+            send_error(args->server, &args->client_addr, "SAY command requires message. ");
             }
-            */
+            
             break;
         case PRIVATE_MESSAGE:
             printf("Client: %d wants to send a private message\n", ntohs(args->client_addr.sin_port));
+
+            if(arguments != NULL){
+                //parse recipient and message
+                char *space = strchr(arguments, ' ');
+                if(space){
+                    *space = '\0';
+                    char *recipient_name = arguments;
+                    char *private_message = space + 1;
+                    handle_private_message(args->server, &args->client_addr, private_message, recipient_name);
+                }
+                else{
+                    send_error(args->server, &args->client_addr, "SAYTO command requires recipient name and message");
+                }
+            }
+            
+            else{
+                send_error(args->server, &args->client_addr, "SAYTO command requires recipient name and message");
+            }
+
             break;
         case MUTE:
             printf("Client: %d wants to mute someone\n", ntohs(args->client_addr.sin_port));
@@ -253,10 +274,10 @@ void* worker_thread(void* arg){
             if(arguments != NULL){
                 handle_mute(args->server, &args->client_addr, arguments);
             }
-            /*
+            
             else{
             send_error(args->server, &args->client_addr, "MUTE command requires a name");   //TODO
-            }*/
+            }
 
             break;
         case UNMUTE:
@@ -265,10 +286,10 @@ void* worker_thread(void* arg){
             if(arguments != NULL){
                 handle_unmute(args->server, &args->client_addr, arguments);
             }
-            /*
+            
             else{
                 send_error(args->server, &args->client_addr, "UNMUTE command requires a name");   //TODO
-            }*/
+            }
 
             break;
         case RENAME:
@@ -277,11 +298,11 @@ void* worker_thread(void* arg){
             if(arguments != NULL){
                 handle_rename(args->server, &args->client_addr, arguments);
             }
-            /*
+            
             else{
                 send_error(args->server, &args->client_addr, "RENAME command requires a new name");   //TODO
             }
-            */
+            
 
             break;
         case KICK_REQUEST:
@@ -357,6 +378,7 @@ void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char
         printf("%s: %s\n", sender->name, message);
 
         // only show to clients who havent muted the sender: TODO
+        send_specific(server, client_addr, message);
 
     }
     else{
@@ -451,6 +473,78 @@ void handle_unmute(ServerContext *server, struct sockaddr_in *client_addr, char*
     int rc = udp_socket_write(server->socket_fd, client_addr, server_response, BUFFER_SIZE);
     
     // 4 - unlock muted list
+    pthread_rwlock_unlock(&server->mute_list_lock);
+}
+
+void handle_private_message(ServerContext *server, struct sockaddr_in *client_addr, char *message, char *recipient_name){
+    // lock muted and client list for reading
+    pthread_rwlock_rdlock(&server->mute_list_lock);
+    pthread_rwlock_rdlock(&server->client_list_lock);
+
+    // find sender and recipient nodes
+    ClientNode* sender = list_find_by_address(server->ClientListHead, client_addr);
+    ClientNode* recipient = list_find_by_name(server->ClientListHead, recipient_name);
+
+    // form message and send to recipient if not muted
+    char private_msg[BUFFER_SIZE];
+    strcpy(private_msg, "[");
+    strncat(private_msg, sender->name, BUFFER_SIZE - strlen(private_msg) - 1);
+    strncat(private_msg, "]: ", BUFFER_SIZE - strlen(private_msg) - 1);
+    strncat(private_msg, message, BUFFER_SIZE - strlen(private_msg) - 1);
+    strncat(private_msg, "\n", BUFFER_SIZE - strlen(private_msg) - 1);
+
+    if(sender && recipient){
+        // check if theres a muted pairing
+        MutedPair* current = server->MutedListHead;
+        if(is_muted(server->MutedListHead, recipient->name, sender->name) ||
+           is_muted(server->MutedListHead, sender->name, recipient->name)){
+            printf("Private message from %s to %s blocked (muted)\n", sender->name, recipient->name);
+            int rc = udp_socket_write(server->socket_fd, client_addr, "Your private message could not be delivered (muted)\n", BUFFER_SIZE);
+        }
+        else{
+            int rc = udp_socket_write(server->socket_fd, &recipient->address, private_msg, BUFFER_SIZE);
+            printf("Private message from %s to %s sent\n", sender->name, recipient->name);
+        }
+    }
+
+    pthread_rwlock_unlock(&server->client_list_lock);
+    pthread_rwlock_unlock(&server->mute_list_lock);
+}
+
+void send_all(ServerContext *server, char *msg){
+    pthread_rwlock_rdlock(&server->client_list_lock);
+
+    //loop through client list and send msg to each client
+    ClientNode* current = server->ClientListHead;
+    while(current){
+        int rc = udp_socket_write(server->socket_fd, &current->address, msg, BUFFER_SIZE);
+        current = current->next;
+    }
+
+    pthread_rwlock_unlock(&server->client_list_lock);
+}
+
+void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *error_msg){
+    
+    int rc = udp_socket_write(server->socket_fd, client_addr, error_msg, BUFFER_SIZE);
+}
+
+void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg){
+    pthread_rwlock_rdlock(&server->mute_list_lock);
+    pthread_rwlock_rdlock(&server->client_list_lock);
+    //send msg to all clients according to MUTED list
+
+    // check address of muted = client_addr, then don't send to the muter
+    MutedPair* current = server->MutedListHead;
+    while(current){
+        ClientNode* muted_client = list_find_by_address(server->ClientListHead, client_addr);
+        if(!(muted_client && strcmp(current->muter, muted_client->name) == 0)){
+            int rc = udp_socket_write(server->socket_fd, client_addr, msg, BUFFER_SIZE);
+        }
+        current = current->next;
+    }
+
+    pthread_rwlock_unlock(&server->client_list_lock);
     pthread_rwlock_unlock(&server->mute_list_lock);
 }
 
