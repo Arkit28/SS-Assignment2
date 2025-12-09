@@ -89,9 +89,9 @@ void *input_thread(void *arg)
 
         // only admin can use kick$
         if (strncmp(line, "kick$", 5) == 0 && !admin_mode_activated) {
-            printf("Only the admin client with port 6666 can use kick$.\n");
+            printf("Kick request sent to admin.\n");
             fflush(stdout);
-            continue;//skip sending to server
+
         }
 
         // send the command to the server 

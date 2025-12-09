@@ -68,6 +68,12 @@ int main(int argc, char *argv[])
 
     // Server main loop
     
+    // destroy locks, free lists and close socket before exiting
+    pthread_rwlock_destroy(&server.client_list_lock);
+    pthread_rwlock_destroy(&server.mute_list_lock);
+    list_free_all(&server.ClientListHead);
+    mute_free_all(&server.MutedListHead);
+    close(server.socket_fd);
 
     return 0;
 }
@@ -206,7 +212,19 @@ void* worker_thread(void* arg){
     command_type = classify_command(command, 0);
     //printf("command type:%d\n", command_type);
 
-    
+    /*
+    //check client is connected for commands except CONNECT
+    if(command_type != CONNECT){
+        pthread_rwlock_rdlock(&args->server->client_list_lock);
+        ClientNode* client = list_find_by_address(args->server->ClientListHead, &args->client_addr);
+        pthread_rwlock_unlock(&args->server->client_list_lock);
+        if(!client){
+            send_error(args->server, &args->client_addr, "Error: You must CONNECT before sending other commands.\n");
+            free(args);
+            return NULL;
+        }
+    }
+    */
 
     switch (command_type) {
         case CONNECT:
@@ -340,18 +358,19 @@ void handle_conn(ServerContext *server, struct sockaddr_in *client_addr, char *n
 
     // 1-create new client node and add to client list
     // 2-set client addr and name
-    // 3-send client acknowledgement message
-    // 4-broadcast to all other clients that a new client has joined
-
     list_add_client(&server->ClientListHead, name, client_addr);
     //list_print_all(server->ClientListHead);
 
     printf("Handled CONNECT for %s\n", name);
     
-    //send_all(server, msg, exclude_addr);   TODO: send welcome message to new client and broadcast to others
-
-    //unlock client list
+    // unlock client list BEFORE calling send_all to avoid deadlock
     pthread_rwlock_unlock(&server->client_list_lock);
+
+    // 3-broadcast to all other clients that a new client has joined
+    char msg[BUFFER_SIZE];
+    strcpy(msg, name);
+    strncat(msg, " has joined the chat!\n", BUFFER_SIZE - strlen(msg)-1);
+    send_all(server, msg);
 }
 
 void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
@@ -368,7 +387,12 @@ void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
 
     printf("Handled DISCONNECT\n");
 
-    //send_all(server, msg, exclude_addr);   TODO: send goodbye message to departing client and broadcast to others
+    char msg[BUFFER_SIZE];
+
+    ClientNode* disconnected_client = list_find_by_address(server->ClientListHead, client_addr);
+    strcpy(msg, disconnected_client->name);
+    strncat(msg, " has left the chat!\n", BUFFER_SIZE - strlen(msg)-1);
+    send_all(server, msg);   
 
     //unlock client list
     pthread_rwlock_unlock(&server->client_list_lock);
@@ -535,7 +559,7 @@ void send_all(ServerContext *server, char *msg){
 
 void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *error_msg){
     
-    int rc = udp_socket_write(server->socket_fd, client_addr, error_msg, BUFFER_SIZE);
+    int rc = udp_socket_write(server->socket_fd, client_addr, strcat("ERROR: ", error_msg), BUFFER_SIZE);
 }
 
 void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg){
@@ -569,8 +593,18 @@ void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr,
         return;
     }
 
+    //TODO
+    /*
+    // send to admin port 6666 to confirm alternatively, if the requester is admin, skip confirmation
+    ClientNode* admin = list_find_by_name(server->ClientListHead, "admin");
+    if(admin != NULL && ntohs(admin->address.sin_port) != 6666){
+        send_error(server, client_addr, "KICK request sent to admin for confirmation");
+        udp_socket_write(server->socket_fd, &admin->address, "KICK request received. Please confirm. (y/n): ", BUFFER_SIZE);
+    }
+    */
+
     // if found, give admin a prompt to confirm kick
-    printf("Admin client requested to kick %s. Confirm? (y/n): ", target_name);
+    printf("Client requested to kick %s. Confirm? (y/n): ", target_name);
     char response = getchar();
     while(getchar() != '\n'); 
 
@@ -579,6 +613,7 @@ void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr,
         list_remove_client(&server->ClientListHead, &target_client->address);
         pthread_rwlock_unlock(&server->client_list_lock);
         printf("Client %s has been kicked from the server.\n", target_name);
+
         char kick_msg[BUFFER_SIZE];
         strcpy(kick_msg, target_name);
         strncat(kick_msg, " has been kicked from the server.\n", BUFFER_SIZE - strlen(kick_msg) - 1);
