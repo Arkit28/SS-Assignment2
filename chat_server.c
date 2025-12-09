@@ -229,12 +229,11 @@ void* worker_thread(void* arg){
     switch (command_type) {
         case CONNECT:
             printf("Client: %d wants to connect\n", ntohs(args->client_addr.sin_port));
-            if(arguments[0] != '\0') {
+            if(arguments[0] != '\0'){
                 handle_conn(args->server, &args->client_addr, arguments);
             }
-            
             else{
-            send_error(args->server, &args->client_addr, "CONNECT command requires a name");   //TODO
+                send_error(args->server, &args->client_addr, "CONNECT command requires a name");
             }
             
             break;
@@ -242,7 +241,7 @@ void* worker_thread(void* arg){
         case DISCONNECT:
             printf("Client: %d wants to disconnect\n", ntohs(args->client_addr.sin_port));
             
-            if(arguments[0] != '\0'){
+            if(arguments != NULL){
                 handle_disconn(args->server, &args->client_addr);
             }
             
@@ -340,11 +339,11 @@ void* worker_thread(void* arg){
             break;
         }
       
-    char server_response[BUFFER_SIZE];
-    strcpy(server_response, "Hi, the server has received: ");
-    strncat(server_response, request_copy, BUFFER_SIZE - strlen(server_response) - 1);
-    strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
-    int rc = udp_socket_write(args->server->socket_fd, &args->client_addr, server_response, BUFFER_SIZE);
+    //char server_response[BUFFER_SIZE];
+    //strcpy(server_response, "Hi, the server has received: ");
+    //strncat(server_response, request_copy, BUFFER_SIZE - strlen(server_response) - 1);
+    //strncat(server_response, "\n", BUFFER_SIZE - strlen(server_response) - 1);
+    //int rc = udp_socket_write(args->server->socket_fd, &args->client_addr, server_response, BUFFER_SIZE);
     
 
     free(args);
@@ -382,20 +381,26 @@ void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
     // 3-send client acknowledgement message
     // 4-broadcast to all other clients that a client has left
 
+    char msg[BUFFER_SIZE];
+
+    ClientNode* disconnected_client = list_find_by_address(server->ClientListHead, client_addr);
+    if(!disconnected_client){
+        pthread_rwlock_unlock(&server->client_list_lock);
+        send_error(server, client_addr, "Error: Disconnect failed.\n");
+        return;
+    }
+    
     list_remove_client(&server->ClientListHead, client_addr);
     //list_print_all(server->ClientListHead);
 
     printf("Handled DISCONNECT\n");
 
-    char msg[BUFFER_SIZE];
-
-    ClientNode* disconnected_client = list_find_by_address(server->ClientListHead, client_addr);
-    strcpy(msg, disconnected_client->name);
-    strncat(msg, " has left the chat!\n", BUFFER_SIZE - strlen(msg)-1);
-    send_all(server, msg);   
-
     //unlock client list
     pthread_rwlock_unlock(&server->client_list_lock);
+
+    strcpy(msg, disconnected_client->name);
+    strncat(msg, " has left the chat!\n", BUFFER_SIZE - strlen(msg)-1);
+    send_all(server, msg);
 }
 
 void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char *message){
@@ -403,24 +408,25 @@ void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char
     pthread_rwlock_rdlock(&server->client_list_lock);
 
     // 1-find client node by addr
-    // 2-broadcast message to all other clients except the sender
-
-    char server_response[BUFFER_SIZE];
     ClientNode* sender = list_find_by_address(server->ClientListHead, client_addr);
-    if(sender){
-        printf("%s: %s\n", sender->name, message);
-
-        // only show to clients who havent muted the sender: TODO
-        send_specific(server, client_addr, message);
-
+    
+    if(!sender){
+        pthread_rwlock_unlock(&server->client_list_lock);
+        send_error(server, client_addr, "Error: You must connect first.\n");
+        return;
     }
-    else{
-        printf("Unknown client: %s\n", message);
-    }
-    int rc = udp_socket_write(server->socket_fd, client_addr, server_response, BUFFER_SIZE);
 
-    //unlock client list
+    printf("%s: %s\n", sender->name, message);
+    
+    // build formatted message with sender's name
+    char formatted_msg[BUFFER_SIZE];
+    snprintf(formatted_msg, sizeof(formatted_msg), "%s: %s", sender->name, message);
+    
+    //unlock client list before calling send_specific to avoid deadlock
     pthread_rwlock_unlock(&server->client_list_lock);
+
+    // 2-broadcast message to all other clients 
+    send_specific(server, client_addr, formatted_msg);
 }
 
 void handle_rename(ServerContext *server, struct sockaddr_in *client_addr, char *new_name){
@@ -565,16 +571,25 @@ void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *er
 void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg){
     pthread_rwlock_rdlock(&server->mute_list_lock);
     pthread_rwlock_rdlock(&server->client_list_lock);
-    //send msg to all clients according to MUTED list
+    
+    // find the sender to get their name
+    ClientNode* sender = list_find_by_address(server->ClientListHead, client_addr);
+    if(!sender) {
+        pthread_rwlock_unlock(&server->client_list_lock);
+        pthread_rwlock_unlock(&server->mute_list_lock);
+        return;
+    }
 
-    // check address of muted = client_addr, then don't send to the muter
-    MutedPair* current = server->MutedListHead;
-    while(current){
-        ClientNode* muted_client = list_find_by_address(server->ClientListHead, client_addr);
-        if(!(muted_client && strcmp(current->muter, muted_client->name) == 0)){
-            int rc = udp_socket_write(server->socket_fd, client_addr, msg, BUFFER_SIZE);
+    // broadcast to all clients except those who muted the sender
+    ClientNode* current_client = server->ClientListHead;
+    while(current_client){
+        
+        // check if this recipient has muted the sender
+        if(!is_muted(server->MutedListHead, current_client->name, sender->name)){
+            udp_socket_write(server->socket_fd, &current_client->address, msg, BUFFER_SIZE);
         }
-        current = current->next;
+        
+        current_client = current_client->next;
     }
 
     pthread_rwlock_unlock(&server->client_list_lock);
