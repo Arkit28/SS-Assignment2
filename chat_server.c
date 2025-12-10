@@ -31,6 +31,7 @@ void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr,
 void send_all(ServerContext *server, char *msg); 
 void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *error_msg); 
 void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg);
+void admin_kick_confirmation(char *target_name);
 
 int main(int argc, char *argv[])
 {
@@ -212,7 +213,7 @@ void* worker_thread(void* arg){
     command_type = classify_command(command, 0);
     //printf("command type:%d\n", command_type);
 
-    /*
+    
     //check client is connected for commands except CONNECT
     if(command_type != CONNECT){
         pthread_rwlock_rdlock(&args->server->client_list_lock);
@@ -224,7 +225,7 @@ void* worker_thread(void* arg){
             return NULL;
         }
     }
-    */
+    
 
     switch (command_type) {
         case CONNECT:
@@ -564,8 +565,9 @@ void send_all(ServerContext *server, char *msg){
 }
 
 void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *error_msg){
-    
-    int rc = udp_socket_write(server->socket_fd, client_addr, strcat("ERROR: ", error_msg), BUFFER_SIZE);
+    char error_buffer[BUFFER_SIZE];
+    snprintf(error_buffer, sizeof(error_buffer), "ERROR: %s", error_msg);
+    udp_socket_write(server->socket_fd, client_addr, error_buffer, BUFFER_SIZE);
 }
 
 void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg){
@@ -596,6 +598,7 @@ void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char 
     pthread_rwlock_unlock(&server->mute_list_lock);
 }
 
+
 void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr, char *target_name){
     // Lock client list for writing
     pthread_rwlock_wrlock(&server->client_list_lock);
@@ -609,35 +612,60 @@ void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr,
     }
 
     //TODO
-    /*
+    
     // send to admin port 6666 to confirm alternatively, if the requester is admin, skip confirmation
     ClientNode* admin = list_find_by_name(server->ClientListHead, "admin");
-    if(admin != NULL && ntohs(admin->address.sin_port) != 6666){
-        send_error(server, client_addr, "KICK request sent to admin for confirmation");
-        udp_socket_write(server->socket_fd, &admin->address, "KICK request received. Please confirm. (y/n): ", BUFFER_SIZE);
-    }
-    */
+    if(admin != NULL && ntohs(admin->address.sin_port) == 6666){
+        if(admin->address.sin_port == client_addr->sin_port){
+            // requester is admin, skip confirmation
+            printf("Admin requested to kick %s. Skipping confirmation.\n", target_name);
+            list_remove_client(&server->ClientListHead, &target_client->address);
+            pthread_rwlock_unlock(&server->client_list_lock);
+            printf("Client %s has been kicked from the server.\n", target_name);
 
-    // if found, give admin a prompt to confirm kick
-    printf("Client requested to kick %s. Confirm? (y/n): ", target_name);
-    char response = getchar();
-    while(getchar() != '\n'); 
-
-    // if admin confirms, remove target from client list and send notification to all clients
-    if(tolower(response) == 'y'){
-        list_remove_client(&server->ClientListHead, &target_client->address);
-        pthread_rwlock_unlock(&server->client_list_lock);
-        printf("Client %s has been kicked from the server.\n", target_name);
-
-        char kick_msg[BUFFER_SIZE];
-        strcpy(kick_msg, target_name);
-        strncat(kick_msg, " has been kicked from the server.\n", BUFFER_SIZE - strlen(kick_msg) - 1);
-        send_all(server, kick_msg);
+            char kick_msg[BUFFER_SIZE];
+            strcpy(kick_msg, target_name);
+            strncat(kick_msg, " has been kicked from the server.\n", BUFFER_SIZE - strlen(kick_msg) - 1);
+            send_all(server, kick_msg);
+        }
+        else{
+            // requester is not admin, send confirmation request
+            char kick_msg[BUFFER_SIZE];
+            strcpy(kick_msg, "KICK REQUEST: .");
+            strncat(kick_msg, target_name, BUFFER_SIZE - strlen(kick_msg) - 1);
+            strcat("perform kick$ <name> to confirm kick, or ignore to deny\n")
+            udp_socket_write(server->socket_fd, &admin->address, kick_msg, BUFFER_SIZE);
+            pthread_rwlock_unlock(&server->client_list_lock);
+            return;
+        }
     }
     else{
-        printf("Kick request for %s cancelled by admin.\n", target_name);
-        send_error(server, client_addr, "KICK request denied by admin.");
+        //let server decide what to do if no admin is connected
+
+        printf("Client requested to kick %s. Confirm? (y/n): ", target_name);
+        char response = getchar();
+        while(getchar() != '\n'); 
+
+        // if admin confirms, remove target from client list and send notification to all clients
+        if(tolower(response) == 'y'){
+            list_remove_client(&server->ClientListHead, &target_client->address);
+            pthread_rwlock_unlock(&server->client_list_lock);
+            printf("Client %s has been kicked from the server.\n", target_name);
+
+            char kick_msg[BUFFER_SIZE];
+            strcpy(kick_msg, target_name);
+            strncat(kick_msg, " has been kicked from the server.\n", BUFFER_SIZE - strlen(kick_msg) - 1);
+            send_all(server, kick_msg);
+        }
+        else{
+            printf("Kick request for %s cancelled by admin.\n", target_name);
+            send_error(server, client_addr, "KICK request denied by admin.");
+        }
     }
+    
+
+    // if found, give admin a prompt to confirm kick
+    
 
     // Unlock client list
     pthread_rwlock_unlock(&server->client_list_lock);
