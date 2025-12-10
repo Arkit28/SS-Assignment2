@@ -603,72 +603,49 @@ void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr,
     // Lock client list for writing
     pthread_rwlock_wrlock(&server->client_list_lock);
 
-    // verify the target_name exists, if not then send error to requester
+    // Verify the target exists 
     ClientNode* target_client = list_find_by_name(server->ClientListHead, target_name);
-    if(!target_client){
-        send_error(server, client_addr, "KICK request failed: target client not found");
+    if (!target_client) {
         pthread_rwlock_unlock(&server->client_list_lock);
+        send_error(server, client_addr, "KICK request failed: target client not found");
         return;
     }
 
-    //TODO
     
-    // send to admin port 6666 to confirm alternatively, if the requester is admin, skip confirmation
+    char kicked_name[MAX_NAME_LEN];
+    strncpy(kicked_name, target_name, MAX_NAME_LEN - 1);
+    kicked_name[MAX_NAME_LEN - 1] = '\0';
+
+    //is an admin connected?
     ClientNode* admin = list_find_by_name(server->ClientListHead, "admin");
-    if(admin != NULL && ntohs(admin->address.sin_port) == 6666){
-        if(admin->address.sin_port == client_addr->sin_port){
-            // requester is admin, skip confirmation
-            printf("Admin requested to kick %s. Skipping confirmation.\n", target_name);
+    
+    if (admin != NULL && ntohs(admin->address.sin_port) == 6666) {
+        
+        if (admin->address.sin_port == client_addr->sin_port) {
+            //skip confirmation if admin is kicking some1
+            printf("Admin requested to kick %s. Processing immediately.\n", kicked_name);
             list_remove_client(&server->ClientListHead, &target_client->address);
             pthread_rwlock_unlock(&server->client_list_lock);
-            printf("Client %s has been kicked from the server.\n", target_name);
 
             char kick_msg[BUFFER_SIZE];
-            strcpy(kick_msg, target_name);
-            strncat(kick_msg, " has been kicked from the server.\n", BUFFER_SIZE - strlen(kick_msg) - 1);
+            snprintf(kick_msg, sizeof(kick_msg), "%s has been kicked from the server.", kicked_name);
             send_all(server, kick_msg);
-        }
-        else{
-            // requester is not admin, send confirmation request
+            printf("Client %s has been kicked.\n", kicked_name);
+        } else {
+            
+            printf("Non-admin requested kick for %s. Asking admin.\n", kicked_name);
+            pthread_rwlock_unlock(&server->client_list_lock);
+
             char kick_msg[BUFFER_SIZE];
-            strcpy(kick_msg, "KICK REQUEST: .");
-            strncat(kick_msg, target_name, BUFFER_SIZE - strlen(kick_msg) - 1);
-            strcat("perform kick$ <name> to confirm kick, or ignore to deny\n")
+            sprintf(kick_msg, "KICK REQUEST: %s (perform 'kick$ %s' to confirm, or ignore to deny)",
+                     kicked_name, kicked_name);
             udp_socket_write(server->socket_fd, &admin->address, kick_msg, BUFFER_SIZE);
-            pthread_rwlock_unlock(&server->client_list_lock);
-            return;
         }
+    } else {
+        
+        pthread_rwlock_unlock(&server->client_list_lock);
+        send_error(server, client_addr, "No admin connected to approve kick request");
     }
-    else{
-        //let server decide what to do if no admin is connected
-
-        printf("Client requested to kick %s. Confirm? (y/n): ", target_name);
-        char response = getchar();
-        while(getchar() != '\n'); 
-
-        // if admin confirms, remove target from client list and send notification to all clients
-        if(tolower(response) == 'y'){
-            list_remove_client(&server->ClientListHead, &target_client->address);
-            pthread_rwlock_unlock(&server->client_list_lock);
-            printf("Client %s has been kicked from the server.\n", target_name);
-
-            char kick_msg[BUFFER_SIZE];
-            strcpy(kick_msg, target_name);
-            strncat(kick_msg, " has been kicked from the server.\n", BUFFER_SIZE - strlen(kick_msg) - 1);
-            send_all(server, kick_msg);
-        }
-        else{
-            printf("Kick request for %s cancelled by admin.\n", target_name);
-            send_error(server, client_addr, "KICK request denied by admin.");
-        }
-    }
-    
-
-    // if found, give admin a prompt to confirm kick
-    
-
-    // Unlock client list
-    pthread_rwlock_unlock(&server->client_list_lock);
 }
 
 
