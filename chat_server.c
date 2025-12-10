@@ -52,7 +52,6 @@ int main(int argc, char *argv[])
 
     //initialise threads
     pthread_t listenerThread;
-    pthread_t workerThread;
 
     //initialise locks
     pthread_rwlock_init(&server.client_list_lock, NULL);
@@ -65,7 +64,6 @@ int main(int argc, char *argv[])
     pthread_create(&listenerThread, NULL, listener_thread, &server);
 
     pthread_join(listenerThread, NULL);
-    pthread_join(workerThread, NULL);
 
     // Server main loop
     
@@ -383,6 +381,7 @@ void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
     // 4-broadcast to all other clients that a client has left
 
     char msg[BUFFER_SIZE];
+    char name_copy[MAX_NAME_LEN];
 
     ClientNode* disconnected_client = list_find_by_address(server->ClientListHead, client_addr);
     if(!disconnected_client){
@@ -391,6 +390,13 @@ void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
         return;
     }
     
+    // copy name before removing node
+    strncpy(name_copy, disconnected_client->name, MAX_NAME_LEN - 1);
+    name_copy[MAX_NAME_LEN - 1] = '\0';
+    if (name_copy[0] == '\0') {
+        snprintf(name_copy, sizeof(name_copy), "client-%d", ntohs(client_addr->sin_port));
+    }
+
     list_remove_client(&server->ClientListHead, client_addr);
     //list_print_all(server->ClientListHead);
 
@@ -399,8 +405,12 @@ void handle_disconn(ServerContext *server, struct sockaddr_in *client_addr){
     //unlock client list
     pthread_rwlock_unlock(&server->client_list_lock);
 
-    strcpy(msg, disconnected_client->name);
-    strncat(msg, " has left the chat!\n", BUFFER_SIZE - strlen(msg)-1);
+    // tell the disconnecting client
+    char bye_msg[] = "Disconnected. Bye!";
+    udp_socket_write(server->socket_fd, client_addr, bye_msg, strlen(bye_msg) + 1);
+
+    // broadcast to everyone else
+    snprintf(msg, sizeof(msg), "%s has left the chat!", name_copy);
     send_all(server, msg);
 }
 
@@ -554,10 +564,11 @@ void handle_private_message(ServerContext *server, struct sockaddr_in *client_ad
 void send_all(ServerContext *server, char *msg){
     pthread_rwlock_rdlock(&server->client_list_lock);
 
+    int len = (int)(strlen(msg) + 1);
     //loop through client list and send msg to each client
     ClientNode* current = server->ClientListHead;
     while(current){
-        int rc = udp_socket_write(server->socket_fd, &current->address, msg, BUFFER_SIZE);
+        int rc = udp_socket_write(server->socket_fd, &current->address, msg, len);
         current = current->next;
     }
 
@@ -574,6 +585,7 @@ void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char 
     pthread_rwlock_rdlock(&server->mute_list_lock);
     pthread_rwlock_rdlock(&server->client_list_lock);
     
+    int len = (int)(strlen(msg) + 1);
     // find the sender to get their name
     ClientNode* sender = list_find_by_address(server->ClientListHead, client_addr);
     if(!sender) {
@@ -588,7 +600,7 @@ void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char 
         
         // check if this recipient has muted the sender
         if(!is_muted(server->MutedListHead, current_client->name, sender->name)){
-            udp_socket_write(server->socket_fd, &current_client->address, msg, BUFFER_SIZE);
+            udp_socket_write(server->socket_fd, &current_client->address, msg, len);
         }
         
         current_client = current_client->next;
