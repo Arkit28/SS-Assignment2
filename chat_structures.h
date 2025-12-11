@@ -37,8 +37,8 @@ typedef struct MutedPair {
 typedef struct {
     char messages[HISTORY_SIZE][BUFFER_SIZE];  // Circular buffer of messages
     int head;                                  // Next write position
-    int count;                                 // Number of messages stored (0-15)
-    pthread_rwlock_t lock;                     // RW lock for concurrent reads
+    int count;                                 
+    pthread_rwlock_t lock;                     
 } MessageHistory;
 
 typedef struct {
