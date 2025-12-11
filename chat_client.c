@@ -50,16 +50,26 @@ void *receive_thread(void *arg)
             break;
         }
 
-        //creating a log file or adding the message to the log file
-        FILE *fp = fopen(log_filename, "a");
-        if (fp != NULL) {
-            fprintf(fp, "%s\n", buffer);
-            fclose(fp);
-        }
+        // check if this is a server message (ERROR, warning, notification, etc.)
+        int is_server_message = (strncmp(buffer, "ERROR:", 6) == 0 ||
+                                  strncmp(buffer, "Warning:", 8) == 0 ||
+                                  strstr(buffer, "has joined") != NULL ||
+                                  strstr(buffer, "has left") != NULL ||
+                                  strstr(buffer, "=== Last") != NULL ||
+                                  strncmp(buffer, "You have been", 13) == 0);
 
-        // Print to the terminal
-        printf("%s\n", buffer);
-        fflush(stdout);
+        if (is_server_message) {
+            // server messages: display in terminal only
+            printf("%s\n", buffer);
+            fflush(stdout);
+        } else {
+            // chat messages: log to file only
+            FILE *fp = fopen(log_filename, "a");
+            if (fp != NULL) {
+                fprintf(fp, "%s\n", buffer);
+                fclose(fp);
+            }
+        }
     }
 
     return NULL;

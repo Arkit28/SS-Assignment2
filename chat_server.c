@@ -31,7 +31,11 @@ void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr,
 void send_all(ServerContext *server, char *msg); 
 void send_error(ServerContext *server, struct sockaddr_in *client_addr, char *error_msg); 
 void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char *msg);
-void admin_kick_confirmation(char *target_name);
+
+//message history helpers
+void history_init(MessageHistory *hist);
+void history_add(MessageHistory *hist, const char *msg);
+void history_send_to_client(MessageHistory *hist, ServerContext *server, struct sockaddr_in *client_addr);
 
 int main(int argc, char *argv[])
 {
@@ -49,6 +53,9 @@ int main(int argc, char *argv[])
     // initialise client connection list and muted list
     server.ClientListHead = NULL;
     server.MutedListHead = NULL;
+
+    //initialise message history
+    history_init(&server.history);
 
     //initialise threads
     pthread_t listenerThread;
@@ -70,6 +77,7 @@ int main(int argc, char *argv[])
     // destroy locks, free lists and close socket before exiting
     pthread_rwlock_destroy(&server.client_list_lock);
     pthread_rwlock_destroy(&server.mute_list_lock);
+    pthread_rwlock_destroy(&server.history.lock);
     list_free_all(&server.ClientListHead);
     mute_free_all(&server.MutedListHead);
     close(server.socket_fd);
@@ -92,6 +100,12 @@ void parse_command(char request[], char command[], char arguments[]) {
     strcpy(command, request);
 
     strcpy(arguments, space + 1);
+    
+    // Remove trailing spaces from arguments
+    int len = strlen(arguments);
+    while (len > 0 && (arguments[len - 1] == ' ' )) {
+        arguments[--len] = '\0';
+    }
 }
 
 int classify_command(char *args, int argc){
@@ -364,10 +378,13 @@ void handle_conn(ServerContext *server, struct sockaddr_in *client_addr, char *n
     // unlock client list BEFORE calling send_all to avoid deadlock
     pthread_rwlock_unlock(&server->client_list_lock);
 
+    // Send last 15 messages to the newly connected client
+    history_send_to_client(&server->history, server, client_addr);
+
     // 3-broadcast to all other clients that a new client has joined
     char msg[BUFFER_SIZE];
     strcpy(msg, name);
-    strncat(msg, " has joined the chat!\n", BUFFER_SIZE - strlen(msg)-1);
+    strncat(msg, " has joined the chat!", BUFFER_SIZE - strlen(msg)-1);
     send_all(server, msg);
 }
 
@@ -436,7 +453,10 @@ void handle_message(ServerContext *server, struct sockaddr_in *client_addr, char
     //unlock client list before calling send_specific to avoid deadlock
     pthread_rwlock_unlock(&server->client_list_lock);
 
-    // 2-broadcast message to all other clients 
+    // Add to history before broadcasting
+    history_add(&server->history, formatted_msg);
+
+    // 2-broadcast message to all other clients (respecting mutes)
     send_specific(server, client_addr, formatted_msg);
 }
 
@@ -562,6 +582,9 @@ void handle_private_message(ServerContext *server, struct sockaddr_in *client_ad
 }
 
 void send_all(ServerContext *server, char *msg){
+    // Add message to history (only for broadcast messages)
+    history_add(&server->history, msg);
+    
     pthread_rwlock_rdlock(&server->client_list_lock);
 
     int len = (int)(strlen(msg) + 1);
@@ -594,7 +617,7 @@ void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char 
         return;
     }
 
-    // broadcast to all clients except those who muted the sender
+    // broadcast to all clients except those who muted the sender and except the sender themselves
     ClientNode* current_client = server->ClientListHead;
     while(current_client){
         
@@ -658,6 +681,77 @@ void handle_kick_request(ServerContext *server, struct sockaddr_in *client_addr,
         pthread_rwlock_unlock(&server->client_list_lock);
         send_error(server, client_addr, "No admin connected to approve kick request");
     }
+}
+
+/* Message History Implementation */
+
+void history_init(MessageHistory *hist) {
+    hist->head = 0;
+    hist->count = 0;
+    pthread_rwlock_init(&hist->lock, NULL);
+    
+    /* Initialize all messages to empty strings */
+    for (int i = 0; i < HISTORY_SIZE; i++) {
+        hist->messages[i][0] = '\0';
+    }
+}
+
+void history_add(MessageHistory *hist, const char *msg) {
+    pthread_rwlock_wrlock(&hist->lock);
+    
+    /* Copy message into circular buffer at head position */
+    strncpy(hist->messages[hist->head], msg, BUFFER_SIZE - 1);
+    hist->messages[hist->head][BUFFER_SIZE - 1] = '\0';
+    
+    /* Move head forward (circular) */
+    hist->head = (hist->head + 1) % HISTORY_SIZE;
+    
+    /* Increment count up to max HISTORY_SIZE */
+    if (hist->count < HISTORY_SIZE) {
+        hist->count++;
+    }
+    
+    pthread_rwlock_unlock(&hist->lock);
+}
+
+void history_send_to_client(MessageHistory *hist, ServerContext *server, struct sockaddr_in *client_addr) {
+    pthread_rwlock_rdlock(&hist->lock);
+
+    /* Copy history under read lock to avoid holding it during network writes */
+    char snapshot[HISTORY_SIZE][BUFFER_SIZE];
+    int count = hist->count;
+    int start = (hist->head - hist->count + HISTORY_SIZE) % HISTORY_SIZE;
+    for (int i = 0; i < count; i++) {
+        int index = (start + i) % HISTORY_SIZE;
+        strncpy(snapshot[i], hist->messages[index], BUFFER_SIZE - 1);
+        snapshot[i][BUFFER_SIZE - 1] = '\0';
+    }
+
+    pthread_rwlock_unlock(&hist->lock);
+
+    if (count == 0) {
+        char welcome[BUFFER_SIZE];
+        strcpy(welcome, "=== Welcome to the chat! No message history available. ===");
+        udp_socket_write(server->socket_fd, client_addr, welcome, strlen(welcome) + 1);
+        return;
+    }
+
+    /* Send header */
+    char header[BUFFER_SIZE];
+    snprintf(header, sizeof(header), "=== Last %d messages ===", count);
+    udp_socket_write(server->socket_fd, client_addr, header, strlen(header) + 1);
+
+    /* Send messages in order from oldest to newest */
+    for (int i = 0; i < count; i++) {
+        if (snapshot[i][0] != '\0') {
+            udp_socket_write(server->socket_fd, client_addr, snapshot[i], strlen(snapshot[i]) + 1);
+        }
+    }
+    
+    /* Send footer */
+    char footer[BUFFER_SIZE];
+    strcpy(footer, "=== End of message history ===");
+    udp_socket_write(server->socket_fd, client_addr, footer, strlen(footer) + 1);
 }
 
 

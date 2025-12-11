@@ -7,6 +7,7 @@
 #define MAX_NAME_LEN 50
 #define SERVER_PORT 12000
 #define BUFFER_SIZE 1024
+#define HISTORY_SIZE 15
 
 enum {
     CONNECT = 0,
@@ -33,10 +34,17 @@ typedef struct MutedPair {
     struct MutedPair *next;          
 } MutedPair;
 
+typedef struct {
+    char messages[HISTORY_SIZE][BUFFER_SIZE];  // Circular buffer of messages
+    int head;                                  // Next write position
+    int count;                                 // Number of messages stored (0-15)
+    pthread_rwlock_t lock;                     // RW lock for concurrent reads
+} MessageHistory;
 
 typedef struct {
     ClientNode *ClientListHead;
     MutedPair *MutedListHead;
+    MessageHistory history;
     pthread_rwlock_t client_list_lock;
     pthread_rwlock_t mute_list_lock;
     int socket_fd;
