@@ -9,11 +9,14 @@
 #include "list_helpers.c"
 
 
-//server commands
+//thread stuff
 void* listener_thread(void* arg);
 void* worker_thread(void* arg);
+void* ping_thread(void* arg);
 
 void print_tokens(char *args[], int argc); // debug function
+
+//command preprocessing
 void parse_command(char request[], char command[], char arguments[]);
 int classify_command(char *args, int argc);
 
@@ -36,6 +39,12 @@ void send_specific(ServerContext *server, struct sockaddr_in *client_addr, char 
 void history_init(MessageHistory *hist);
 void history_add(MessageHistory *hist, const char *msg);
 void history_send_to_client(MessageHistory *hist, ServerContext *server, struct sockaddr_in *client_addr);
+
+// activity tracking helpers
+void update_client_activity(ServerContext *server, struct sockaddr_in *client_addr);
+
+// ping helpers
+void handle_ret_ping(ServerContext *server, struct sockaddr_in *client_addr);
 
 int main(int argc, char *argv[])
 {
@@ -66,6 +75,10 @@ int main(int argc, char *argv[])
 
 
     printf("Server Started!\n");
+
+    //ping thread spawn
+    pthread_t pingThread;
+    pthread_create(&pingThread, NULL, ping_thread, &server);
 
     //spawn listener thread 
     pthread_create(&listenerThread, NULL, listener_thread, &server);
@@ -99,7 +112,7 @@ void parse_command(char request[], char command[], char arguments[]) {
 
     strcpy(arguments, space + 1);
     
-    // remove trailing spaces from arguments to prevent 'a ' vs 'a' 
+    // remove trailing spaces from arguments to prevent 'a ' vs 'a' problem
     int len = strlen(arguments);
     while (len > 0 && (arguments[len - 1] == ' ' )) {
         arguments[--len] = '\0';
@@ -132,6 +145,9 @@ int classify_command(char *args, int argc){
     else if(strncmp("kick$", args, 5) == 0){
         return KICK_REQUEST;            //NOTE : admin verfication is needed
     }
+    else if(strncmp("ret-ping$", args, 9) == 0){
+        return RET_PING;
+    }
 
     return -1;  //unknown command
 }
@@ -141,7 +157,7 @@ void* listener_thread(void* arg){
 
     ServerContext* server = (ServerContext*) arg;
 
-    printf("Listener thread has pulled up \n");
+    //printf("Listener thread has pulled up \n");
 
 
     while (1) 
@@ -214,14 +230,17 @@ void* worker_thread(void* arg){
     
     //check client is connected for commands except CONNECT
     if(command_type != CONNECT){
-        pthread_rwlock_rdlock(&args->server->client_list_lock);
+        pthread_rwlock_wrlock(&args->server->client_list_lock);
         ClientNode* client = list_find_by_address(args->server->ClientListHead, &args->client_addr);
-        pthread_rwlock_unlock(&args->server->client_list_lock);
         if(!client){
+            pthread_rwlock_unlock(&args->server->client_list_lock);
             send_error(args->server, &args->client_addr, "Error: You must CONNECT before sending other commands.\n");
             free(args);
             return NULL;
         }
+        // Update last_active timestamp for this client
+        client->last_active = time(NULL);
+        pthread_rwlock_unlock(&args->server->client_list_lock);
     }
     
 
@@ -332,6 +351,11 @@ void* worker_thread(void* arg){
                 send_error(args->server, &args->client_addr, "KICK command requires a target name");   //TODO
             }
 
+            break;
+
+        case( RET_PING):
+            printf("Client: %d returned a ping\n", ntohs(args->client_addr.sin_port));
+            handle_ret_ping(args->server, &args->client_addr);
             break;
         default:
             printf("Client: %d sent an unknown command\n", ntohs(args->client_addr.sin_port));
@@ -563,7 +587,6 @@ void handle_private_message(ServerContext *server, struct sockaddr_in *client_ad
 }
 
 void send_all(ServerContext *server, char *msg){
-    // Add message to history 
     history_add(&server->history, msg);
     
     pthread_rwlock_rdlock(&server->client_list_lock);
@@ -688,7 +711,7 @@ void history_add(MessageHistory *hist, const char *msg) {
      
     hist->head = (hist->head + 1) % HISTORY_SIZE;
     
-    // Increment count up to max HISTORY_SIZE 
+ 
     if (hist->count < HISTORY_SIZE) {
         hist->count++;
     }
@@ -713,14 +736,14 @@ void history_send_to_client(MessageHistory *hist, ServerContext *server, struct 
 
     if (count == 0) {
         char welcome[BUFFER_SIZE];
-        strcpy(welcome, "=== Welcome to the chat! No message history available. ===");
+        strcpy(welcome, "       Welcome to the chat! No message history available.");
         udp_socket_write(server->socket_fd, client_addr, welcome, strlen(welcome) + 1);
         return;
     }
 
     // send msgs 
     char header[BUFFER_SIZE];
-    snprintf(header, sizeof(header), "=== Last %d messages ===", count);
+    snprintf(header, sizeof(header), " |Last %d messages| ", count);
     udp_socket_write(server->socket_fd, client_addr, header, strlen(header) + 1);
 
     for (int i = 0; i < count; i++) {
@@ -732,4 +755,99 @@ void history_send_to_client(MessageHistory *hist, ServerContext *server, struct 
     udp_socket_write(server->socket_fd, client_addr, "End of message history", 23);
 }
 
+//checks for inactive clients and disconnects them,
+// if client is under a 45 seconds inactivity, send ping
+void* ping_thread(void* arg){
+    ServerContext* server = (ServerContext*) arg;
 
+    while(1){
+        sleep(PING_TIMEOUT_SECONDS); //ping interval
+
+        pthread_rwlock_wrlock(&server->client_list_lock);
+
+        ClientNode* current = server->ClientListHead;
+        time_t now = time(NULL);
+
+        while(current){
+            double seconds_inactive = difftime(now, current->last_active);
+
+            // Check if client has pending ping and response deadline has passed
+            if(current->pending_ping == 1 && now > current->ping_max_response_time){
+                printf("Client %s failed to respond to ping. Disconnecting due to inactivity.\n", current->name);
+                struct sockaddr_in addr_copy = current->address;
+                char name_copy[MAX_NAME_LEN];
+                strncpy(name_copy, current->name, MAX_NAME_LEN - 1);
+                name_copy[MAX_NAME_LEN - 1] = '\0';
+                list_remove_client(&server->ClientListHead, &addr_copy);
+                
+                char timeout_msg[BUFFER_SIZE];
+                snprintf(timeout_msg, sizeof(timeout_msg), "%s has been disconnected due to inactivity (no ping response).", name_copy);
+                send_all(server, timeout_msg);
+                
+                //restart scan from beginning after removal
+                break;
+            }
+            else if(seconds_inactive >= MAX_TIMEOUT_SECONDS && current->pending_ping == 0){
+                // send client a ping, with 20 seconds to respond
+                current->pending_ping = 1;
+                char ping_msg[] = "ping$";
+                strncat(ping_msg, " Respond with ret_ping$ within 20s to avoid disconnection", BUFFER_SIZE - strlen(ping_msg) - 1);
+                udp_socket_write(server->socket_fd, &current->address, ping_msg, strlen(ping_msg) + 1);
+                printf("Sent ping to %s due to inactivity\n", current->name);
+                current->ping_max_response_time = now + PING_TIMEOUT_SECONDS;
+                current = current->next;
+            }
+            else{
+                current = current->next;
+            }
+        } 
+        
+        //unlock client list
+        
+    }
+    pthread_rwlock_unlock(&server->client_list_lock);
+    return NULL;
+}
+
+
+void handle_ret_ping(ServerContext* server, struct sockaddr_in *client_addr){
+    pthread_rwlock_rdlock(&server->client_list_lock);
+
+    ClientNode* client = list_find_by_address(server->ClientListHead, client_addr);
+
+    if(client->pending_ping == 1){
+        if(time(NULL) <= client->ping_max_response_time){
+            printf("Received valid ping response from %s. Connection sustained.\n", client->name);
+            client->last_active = time(NULL);
+            client->pending_ping = 0;
+            udp_socket_write(server->socket_fd, client_addr, "Ping response received. Connection sustained.\n", BUFFER_SIZE);
+        }
+
+        else{
+            printf("Ping response from %s timed out. Disconnecting client due to inactivity.\n", client->name);
+            pthread_rwlock_unlock(&server->client_list_lock);
+            handle_disconn(server, client_addr);
+            return;
+        }
+
+    }
+    else if(client->pending_ping == 0){
+        printf("Unexpected ping response from %s. No ping was sent.\n", client->name);
+        client->last_active = time(NULL);
+        client->pending_ping = 0;
+        udp_socket_write(server->socket_fd, client_addr, "No ping was sent. Connection sustained.\n", BUFFER_SIZE);
+    }
+
+    pthread_rwlock_unlock(&server->client_list_lock);
+
+}
+
+void update_client_activity(ServerContext *server, struct sockaddr_in *client_addr){
+    pthread_rwlock_wrlock(&server->client_list_lock);
+    ClientNode* client = list_find_by_address(server->ClientListHead, client_addr);
+    if(client){
+        client->last_active = time(NULL);
+        client->pending_ping = 0;
+    }
+    pthread_rwlock_unlock(&server->client_list_lock);
+}

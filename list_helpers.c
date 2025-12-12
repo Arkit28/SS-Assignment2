@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <time.h>
 
 
 //client managing functions
@@ -19,6 +20,9 @@ void list_add_client(ClientNode **head, char *name, struct sockaddr_in *address)
 
     new_node->address = *address;
     new_node->is_connected = 1;
+    new_node->last_active = time(NULL);
+    new_node->pending_ping = 0;
+    new_node->ping_max_response_time = 0;
 
     new_node->next = *head;
     *head = new_node;

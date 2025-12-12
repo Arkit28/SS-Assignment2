@@ -22,7 +22,6 @@ void *receive_thread(void *arg)
         // waiting for a packet to be received and if so writing contents into the buffer
         int rc = udp_socket_read(client_sd, &from_addr, buffer, BUFFER_SIZE);
 
-        //nothing so skip the iteration
         if (rc <= 0) {
             continue;
         }
@@ -50,13 +49,13 @@ void *receive_thread(void *arg)
             break;
         }
 
-        // check if this is a server message (ERROR, warning, notification, etc.)
+        // display message in command terminal if a server message
         int is_server_message = (strncmp(buffer, "ERROR:", 6) == 0 ||
                                   strncmp(buffer, "Warning:", 8) == 0 ||
                                   strstr(buffer, "has joined") != NULL ||
                                   strstr(buffer, "has left") != NULL ||
-                                  strstr(buffer, "=== Last") != NULL ||
-                                  strncmp(buffer, "You have been", 13) == 0);
+                                  strncmp(buffer, "You have been", 13) == 0 ||
+                                  strncmp(buffer, "Unexpected", 10) == 0 ||);
 
         if (is_server_message) {
             // server messages: display in terminal only
@@ -84,7 +83,7 @@ void *input_thread(void *arg)
         printf(">> ");
         fflush(stdout);
 
-        // read a line from stdin
+        
         if (!fgets(line, sizeof(line), stdin)) {
             keep_running = 0;
             break;
@@ -93,7 +92,7 @@ void *input_thread(void *arg)
         //remove extra line 
         line[strcspn(line, "\n")] = '\0';
 
-        // ignore the empty lines
+        
         if (line[0] == '\0')
             continue;
 
@@ -104,7 +103,7 @@ void *input_thread(void *arg)
 
         }
 
-        // send the command to the server 
+        
         udp_socket_write(client_sd, &server_addr, line, strlen(line) + 1);
 
         // disconnect command done after sending command so client doesnt shut down before sending the disconn command to server
@@ -122,7 +121,7 @@ int main(int argc, char *argv[])
 {
     admin_mode_activated = (argc > 1 && strcmp(argv[1], "admin") == 0);
 
-    // open UDP socket
+    
     if (admin_mode_activated) {
         client_sd = udp_socket_open(6666);
         printf("Admin client started on port 6666\n");
@@ -155,10 +154,10 @@ int main(int argc, char *argv[])
     snprintf(log_filename, sizeof(log_filename), "iChat_%hu.txt", my_port);
     printf("Logging chat to %s\n", log_filename);
 
-    // create input and receiver threads
+    
     pthread_t input_tid, recv_tid;
 
-    // check pthread_create for errors
+    
     if (pthread_create(&input_tid, NULL, input_thread, NULL) != 0) {
         perror("pthread_create for input thread failed");
         close(client_sd);
@@ -172,10 +171,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // wait for input thread to finish
     pthread_join(input_tid, NULL);
 
-    // signal receiver to stop and wait for it
     keep_running = 0;
     pthread_join(recv_tid, NULL);
 
