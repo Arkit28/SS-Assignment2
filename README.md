@@ -7,6 +7,9 @@
 
 This project implements a multithreaded UDP chat application with a simple command protocol. Each client binds to its own UDP port, runs **two threads** (one for user input, one for receiving server messages), and logs everything it receives to a per-client text file (`iChat_<port>.txt`).
 
+#### Progress
+We completed the assignment fully up to and including PE2. 
+
 ### Supported commands
 The server parses incoming requests and handles the following commands:
 - `conn$ <name>` — connect/register a client name
@@ -36,6 +39,13 @@ An admin client can be started by running the client with the `admin` argument, 
 - Added debug output to make testing easier.
 - Helper functions added for parsing and request handling.
 - Simple terminal UI using multiple per-client log files based on each client’s port.
+
+### PE1 Implementation
+To create a solution to PE1 we implemented a circular buffer which stores the latest 15 message sent on the chat. In order to make the chat logs more readable, we decided to separate user-specific server notifications like ping$ or kick$ acknowledgement and user messages from say$ and sayto$. General server notifications that apply to all clients like a new client joining or a client being kicked from the server still get reported in the chat logs.
+
+
+### PE2 Implementation
+To create a solution to PE2 we decided against using a min-heap. Instead we decided to add extra variables to the ClientList nodes to store the last timestamp of activity, a flag to indicate whether to expect a ping from the client and a deadline for the ret-ping$ to be received by the server. A new ping thread was created to cycle through the client list every 20 seconds and check each clients' latest activity, removing, notifying or skipping as needed. The min-heap data structure would be more efficient in time complexity in terms of a per update basis compared to the linked list sweep (O(LogN) vs O(N)), especially for a larger client base. 
 
 ## Basic Functions tested
 

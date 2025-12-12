@@ -3,11 +3,15 @@
 
 #include <pthread.h>
 #include <netinet/in.h>
+#include <time.h>
+
 
 #define MAX_NAME_LEN 50
 #define SERVER_PORT 12000
 #define BUFFER_SIZE 1024
 #define HISTORY_SIZE 15
+#define MAX_TIMEOUT_SECONDS 300
+#define PING_TIMEOUT_SECONDS 20
 
 enum {
     CONNECT = 0,
@@ -17,7 +21,8 @@ enum {
     MUTE,
     UNMUTE,
     RENAME,
-    KICK_REQUEST,    
+    KICK_REQUEST,   
+    RET_PING, 
 };
 
 typedef struct ClientNode {
@@ -25,6 +30,9 @@ typedef struct ClientNode {
     struct sockaddr_in address;
     int is_connected;
     struct ClientNode* next;
+    time_t last_active;
+    int pending_ping;
+    time_t ping_max_response_time;
 } ClientNode;
 
 
