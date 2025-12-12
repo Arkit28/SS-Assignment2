@@ -1,3 +1,8 @@
+## Partners
+
+- Shashank vinoo CID:02600927
+- Archit Bhansali CID:
+
 ## Features
 
 This project implements a multithreaded UDP chat application with a simple command protocol. Each client binds to its own UDP port, runs **two threads** (one for user input, one for receiving server messages), and logs everything it receives to a per-client text file (`iChat_<port>.txt`).
@@ -11,6 +16,7 @@ The server parses incoming requests and handles the following commands:
 - `unmute$ <name>` — start receiving broadcasts from that client again
 - `rename$ <new_name>` — change your displayed name
 - `disconn$` — disconnect from the chat
+- `history` — displays last messages before client connects
 
 ### Admin mode + `kick$`
 An admin client can be started by running the client with the `admin` argument, which binds to the reserved UDP port **6666**. This admin client has the privilege to:
@@ -56,7 +62,7 @@ An admin client can be started by running the client with the `admin` argument, 
 
 ### `sayto$` 
 
-![](Images/sayto_term.png)
+![](images/sayto_term.png)
 
 - `shashank` sends a private message to `archit` using `sayto$ archit <message>`.
 - The server logs show it received a private message request and routed it to the correct recipient.
@@ -107,6 +113,41 @@ An admin client can be started by running the client with the `admin` argument, 
 - When **archit** tries `kick$ shashank`, the server rejects it because archit is **not admin**, and the request gets forwarded to admin instead (“Kick request sent to admin”).
 - The admin then types `kick$ shashank` to **confirm** the kick. The first attempt fails with `target client not found` (case/lookup mismatch), but the second confirmation succeeds.
 - Once confirmed, the server kicks `shashank` immediately and broadcasts the result so other clients (like `archit`) see that `shashank` has been kicked.
+
+### **History Extension (Last 15 Messages on Join)**
+
+![](images/history_term.png)
+
+- In this test, we simulate a client (`senderof15`) sending a sequence of messages before anyone else joins the chat.  
+  The server records each of these messages inside the **circular message buffer**, which stores up to the **last 15 messages**.
+
+- After sending messages like:
+
+    - say$ 1
+    - say$ 2
+    - …
+    - say$ 7
+
+a new client named **recipient** joins the chat.
+
+- As soon as `recipient` connects, the server immediately sends them a formatted history block:
+
+This matches the server’s internal log exactly the new client sees only the most recent messages, **not everything from the beginning**.
+
+- On the UI side, using: tail -f iChat_53399.txt
+
+you can verify that the history is correctly written into the recipient’s log file, showing the final circular buffer output.
+
+- This test demonstrates that:
+- The **circular buffer** correctly stores only the **most recent messages**.
+- New clients always receive the **latest 15 messages** on connection.
+- The UI logs and terminal output remain consistent across clients.
+- Older messages outside the buffer window are **not sent**, exactly as required.
+
+This confirms the history extension is fully working and consistent across server, client, and UI outputs.
+
+
+
 
 
 
