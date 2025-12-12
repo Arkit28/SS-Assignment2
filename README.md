@@ -1,7 +1,7 @@
 ## Partners
 
 - Shashank vinoo CID:02600927
-- Archit Bhansali CID:
+- Archit Bhansali CID: 02566199
 
 ## Features
 
